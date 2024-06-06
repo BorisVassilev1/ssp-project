@@ -17,6 +17,15 @@ struct TaskSystemExecutor {
 private:
     TaskSystemExecutor(int threadCount) {};
 public:
+    enum class TaskState {
+        Waiting,
+        Executing,
+        Scheduled,
+        Finished,
+        Unknown,
+    };
+
+
     TaskSystemExecutor(const TaskSystemExecutor &) = delete;
     TaskSystemExecutor &operator=(const TaskSystemExecutor &) = delete;
 
@@ -68,6 +77,16 @@ public:
      */
     void OnTaskCompleted(TaskID task, std::function<void(TaskID)> &&callback) {
         callback(task);
+    }
+
+    /**
+     * @brief Get the state of a given task
+     *
+     * @param task
+     * @return TaskState
+     */
+    TaskState GetTaskState(TaskID task) {
+        return TaskState::Waiting;
     }
 
     /**
