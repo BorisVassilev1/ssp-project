@@ -6,8 +6,18 @@
 #include <map>
 #include <functional>
 
-namespace TaskSystem {
 
+inline std::string operator""_lib(const char* str, std::size_t size) {
+#if defined(_WIN32) || defined(_WIN64)
+	return std::string{str} + ".dll";
+#elif defined(__APPLE__)
+	return "./lib" + std::string{str} + ".dylib";
+#elif defined(__linux__)
+	return "./lib" + std::string{str} + ".so";
+#endif
+}
+
+namespace TaskSystem {
 
 /**
  * @brief The task system main class that can accept tasks to be scheduled and execute them on multiple threads

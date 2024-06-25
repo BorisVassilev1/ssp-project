@@ -40,7 +40,7 @@ struct RaytracerParams : Task {
 void testRenderer() {
     TaskSystemExecutor &ts = TaskSystemExecutor::GetInstance();
 
-    const bool libLoaded = ts.LoadLibrary("libRaytracerExecutor.dylib");
+    const bool libLoaded = ts.LoadLibrary("./libRaytracerExecutor.so");
     assert(libLoaded);
     std::unique_ptr<Task> task = std::make_unique<RaytracerParams>("Example");
 
@@ -50,13 +50,7 @@ void testRenderer() {
 
 void testPrinter() {
     TaskSystemExecutor &ts = TaskSystemExecutor::GetInstance();
-#if defined(_WIN32) || defined(_WIN64)
-    const bool libLoaded = ts.LoadLibrary("PrinterExecutor.dll");
-#elif defined(__APPLE__)
-    const bool libLoaded = ts.LoadLibrary("libPrinterExecutor.dylib");
-#elif defined(__linux__)
-    const bool libLoaded = ts.LoadLibrary("libPrinterExecutor.so");
-#endif
+    const bool libLoaded = ts.LoadLibrary("PrinterExecutor"_lib);
     assert(libLoaded);
 
     // two instances of the same task
