@@ -4,7 +4,6 @@
 #include <chrono>
 #include <thread>
 
-
 using namespace TaskSystem;
 
 struct PrinterParams : Task {
@@ -40,12 +39,25 @@ struct RaytracerParams : Task {
 void testRenderer() {
     TaskSystemExecutor &ts = TaskSystemExecutor::GetInstance();
 
-    const bool libLoaded = ts.LoadLibrary("./libRaytracerExecutor.so");
+    const bool libLoaded = ts.LoadLibrary("RaytracerExecutor"_lib);
     assert(libLoaded);
-    std::unique_ptr<Task> task = std::make_unique<RaytracerParams>("Example");
+    std::unique_ptr<Task> task1 = std::make_unique<RaytracerParams>("HeavyMesh");
+    std::unique_ptr<Task> task2 = std::make_unique<RaytracerParams>("HeavyMesh");
+    std::unique_ptr<Task> task3 = std::make_unique<RaytracerParams>("HeavyMesh");
 
-    TaskSystemExecutor::TaskID id = ts.ScheduleTask(std::move(task), 1);
-    ts.WaitForTask(id);
+    TaskSystemExecutor::TaskID id1 = ts.ScheduleTask(std::move(task1), 100);
+    TaskSystemExecutor::TaskID id2 = ts.ScheduleTask(std::move(task2), 100);
+    TaskSystemExecutor::TaskID id3 = ts.ScheduleTask(std::move(task3), 100);
+
+    ts.OnTaskCompleted(id1, [](TaskSystemExecutor::TaskID id) {
+        printf("Render 1 finished\n");
+    });
+    ts.OnTaskCompleted(id2, [](TaskSystemExecutor::TaskID id) {
+        printf("Render 2 finished\n");
+    });
+    ts.WaitForTask(id1);
+    ts.WaitForTask(id2);
+    ts.WaitForTask(id3);
 }
 
 void testPrinter() {
@@ -55,7 +67,7 @@ void testPrinter() {
 
     // two instances of the same task
     std::unique_ptr<Task> p1 = std::make_unique<PrinterParams>(100, 25);
-    std::unique_ptr<Task> p2 = std::make_unique<PrinterParams>(100, 25);
+    std::unique_ptr<Task> p2 = std::make_unique<PrinterParams>(50, 25);
 
     // give some time for the first task to execute
     TaskSystemExecutor::TaskID id1 = ts.ScheduleTask(std::move(p1), 10);
@@ -67,6 +79,9 @@ void testPrinter() {
     ts.OnTaskCompleted(id1, [](TaskSystemExecutor::TaskID id) {
         printf("Task 1 finished\n");
     });
+    ts.OnTaskCompleted(id2, [](TaskSystemExecutor::TaskID id) {
+        printf("Task 2 finished\n");
+    });
     ts.WaitForTask(id2);
     ts.WaitForTask(id1);
 }
@@ -74,7 +89,10 @@ void testPrinter() {
 int main(int argc, char *argv[]) {
     TaskSystemExecutor::Init(4);
 
-    testPrinter();
+	testRenderer();
+    //testPrinter();
 
+
+	TaskSystemExecutor::Shutdown();
     return 0;
 }

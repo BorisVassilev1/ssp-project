@@ -1,3 +1,4 @@
+cmake_minimum_required(VERSION 3.25)
 project(TaskSystemExample)
 
 SET(PLUGIN_INSTALL_PATH "${CMAKE_BINARY_DIR}/../ts_executors" CACHE STRING "Path to collect dynamic libs and application")

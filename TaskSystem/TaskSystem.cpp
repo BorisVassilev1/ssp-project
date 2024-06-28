@@ -20,7 +20,6 @@ TaskSystemExecutor &TaskSystemExecutor::GetInstance() {
 }
 
 bool TaskSystemExecutor::LoadLibrary(const std::string &path) {
-	printf("loading library: %s\n", path.c_str());
 #ifdef USE_WIN
     HMODULE handle = LoadLibraryA(path.c_str());
 #else

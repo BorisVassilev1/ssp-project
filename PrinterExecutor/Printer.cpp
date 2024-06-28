@@ -21,7 +21,7 @@ struct Printer : TaskSystem::Executor {
             return ExecStatus::ES_Stop;
         }
 
-        printf("Printer [%d/%d]: %d\n", threadIndex, threadCount, myValue);
+        printf("Printer [%d/%d]: %d/%d\n", threadIndex, threadCount, myValue, max);
         std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
         return ExecStatus::ES_Continue;
     };
