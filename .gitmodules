@@ -1,3 +1,6 @@
 [submodule "RaytracerExecutor/urban-spork"]
 	path = RaytracerExecutor/urban-spork
 	url = git@github.com:BorisVassilev1/urban-spork.git
+[submodule "BRDFExecutor/glm"]
+	path = BRDFExecutor/glm
+	url = git@github.com:g-truc/glm.git
