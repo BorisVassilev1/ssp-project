@@ -120,23 +120,25 @@ void TaskSystemExecutor::reschedule() {
 	// execution across threads and tasks
 	{
 		TaskID next = scheduled.front();
-		while (tasks[next].state.load(std::memory_order_relaxed) == TaskState::Finished) {
+		while (!scheduled.empty() && tasks[next].finished.test(std::memory_order_relaxed)) {
 			scheduled.pop();
 			next = scheduled.front();
 		}
-		TaskID prev;
-		while (executing[reschedule_idx].load(std::memory_order_relaxed) == next) {
-			++reschedule_idx;
-			reschedule_idx %= threadCount;
-		}
-		prev = executing[reschedule_idx].exchange(next);
-		tasks[next].state.store(TaskState::Executing, std::memory_order_relaxed);
-		scheduled.pop();
-		if (prev != -1) {
-			scheduled.push(prev);
-			tasks[prev].state.store(TaskState::Scheduled, std::memory_order_relaxed);
-			++reschedule_idx;
-			reschedule_idx %= threadCount;
+		if (!scheduled.empty()) {
+			TaskID prev;
+			while (executing[reschedule_idx].load(std::memory_order_relaxed) == next) {
+				++reschedule_idx;
+				reschedule_idx %= threadCount;
+			}
+			prev = executing[reschedule_idx].exchange(next);
+			tasks[next].state.store(TaskState::Executing, std::memory_order_relaxed);
+			scheduled.pop();
+			if (prev != -1) {
+				scheduled.push(prev);
+				tasks[prev].state.store(TaskState::Scheduled, std::memory_order_relaxed);
+				++reschedule_idx;
+				reschedule_idx %= threadCount;
+			}
 		}
 	}
 	// find idling threads and assign them work
@@ -161,7 +163,7 @@ TaskSystemExecutor::TaskSystemExecutor(int threadCount)
 
 			auto execID = executing[threadID].load(std::memory_order_relaxed);
 			if (execID == -1) {
-				std::this_thread::yield();
+				//std::this_thread::yield();
 				continue;
 			}
 
@@ -171,14 +173,15 @@ TaskSystemExecutor::TaskSystemExecutor(int threadCount)
 			Executor::ExecStatus res = info.exec->ExecuteStep(threadID, this->threadCount);
 
 			if (res == Executor::ExecStatus::ES_Stop) {
-				TaskState expected = TaskState::Executing;
-				executing[threadID].compare_exchange_strong(execID, -1, std::memory_order_seq_cst);
-				if(info.state.exchange(TaskState::Finished, std::memory_order_relaxed) != TaskState::Finished) {
-					info.callback(execID);
+				if (!info.finished.test_and_set(std::memory_order_relaxed)) {
+					info.state.store(TaskState::Finished, std::memory_order_relaxed);
+					TaskCallback callback = info.callback.load(std::memory_order_relaxed);
+					if (callback) callback(execID);
 					info.done.notify_all();
 					rescheduleCndVar.notify_all();
 				}
-				std::this_thread::yield();
+				executing[threadID].compare_exchange_strong(execID, -1, std::memory_order_release);
+				//std::this_thread::yield();
 			}
 		}
 	};
@@ -186,8 +189,7 @@ TaskSystemExecutor::TaskSystemExecutor(int threadCount)
 	scheduler = [this] {
 		glfwSetErrorCallback(glfw_error_callback);
 		if (!glfwInit()) return;
-		GLFWwindow *window =
-			glfwCreateWindow(100, 60 * this->threadCount + 50, "Dear ImGui GLFW+OpenGL3 example", nullptr, nullptr);
+		GLFWwindow *window = glfwCreateWindow(100, 60 * this->threadCount + 50, "Scheduler GUI", nullptr, nullptr);
 		if (window == nullptr) return;
 		glfwMakeContextCurrent(window);
 
@@ -257,6 +259,19 @@ TaskSystemExecutor::~TaskSystemExecutor() {
 	for (auto &th : threads) {
 		if (th.joinable()) { th.join(); }
 	}
+}
+
+void TaskSystemExecutor::OnTaskCompleted(TaskID task, TaskCallback callback) {
+	if (tasks[task].finished.test(std::memory_order_relaxed)) {
+		callback(task);
+		return;
+	}
+	tasks[task].callback.store(callback, std::memory_order_relaxed);
+}
+
+void TaskSystemExecutor::TaskData::waitDone() {
+	std::unique_lock lock(mtx);
+	done.wait(lock, [this] { return finished.test(std::memory_order_relaxed); });
 }
 
 };	   // namespace TaskSystem

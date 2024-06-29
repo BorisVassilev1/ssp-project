@@ -1,6 +1,5 @@
 #pragma once
 
-
 #include "Task.h"
 #include "Executor.h"
 
@@ -75,13 +74,14 @@ struct TaskSystemExecutor {
 
 	~TaskSystemExecutor();
 
-	std::function<void(int)> worker;
+	std::function<void(int)>  worker;
 	std::function<void(void)> scheduler;
 
 	void reschedule();
 
    public:
-	using TaskID = std::size_t;
+	using TaskID	   = std::size_t;
+	using TaskCallback = void (*)(TaskID);
 	enum class TaskState {
 		Waiting,
 		Executing,
@@ -137,9 +137,7 @@ struct TaskSystemExecutor {
 	 * @param task the task that was previously scheduled
 	 * @param callback the callback to be executed
 	 */
-	void OnTaskCompleted(TaskID task, std::function<void(TaskID)> &&callback) {
-		tasks[task].callback = std::move(callback);
-	}
+	void OnTaskCompleted(TaskID task, TaskCallback callback);
 
 	/**
 	 * @brief Get the state of a given task
@@ -170,19 +168,18 @@ struct TaskSystemExecutor {
 
    private:
 	struct TaskData {
-		std::unique_ptr<Executor>	exec;
-		std::atomic<TaskState>		state = TaskState::Unknown;
-		std::condition_variable		done;
-		std::mutex					mtx;
-		std::function<void(TaskID)> callback;
-		int							priority;
+		std::unique_ptr<Executor> exec;
+		std::atomic<TaskState>	  state	   = TaskState::Unknown;
+		std::atomic_flag		  finished = false;
+		std::condition_variable	  done;
+		std::mutex				  mtx;
+		std::atomic<TaskCallback> callback;
+		int						  priority;
 
 		TaskData(std::unique_ptr<Executor> exec, TaskState state, int priority)
 			: exec(std::move(exec)), state(state), callback([](TaskID) {}), priority(priority) {}
-		void waitDone() {
-			std::unique_lock lock(mtx);
-			done.wait(lock, [this] { return state.load() == TaskState::Finished; });
-		}
+
+		void waitDone();
 	};
 
 	static TaskSystemExecutor				  *self;
