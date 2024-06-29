@@ -14,7 +14,7 @@ class Window {
 	GLFWwindow *window;
 
 public:
-	Window(uint width, uint height, const std::string &name) {
+	Window(unsigned int width, unsigned int height, const std::string &name) {
 		glfwSetErrorCallback(glfw_error_callback);
 		if (!glfwInit()) return;
 		window = glfwCreateWindow(width, height, name.c_str(), nullptr, nullptr);

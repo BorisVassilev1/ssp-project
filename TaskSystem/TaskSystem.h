@@ -17,7 +17,7 @@
 
 inline std::string operator""_lib(const char *str, std::size_t size) {
 #if defined(_WIN32) || defined(_WIN64)
-	return std::string{str} + ".dll";
+	return "./lib" + std::string{str} + ".dll";
 #elif defined(__APPLE__)
 	return "./lib" + std::string{str} + ".dylib";
 #elif defined(__linux__)

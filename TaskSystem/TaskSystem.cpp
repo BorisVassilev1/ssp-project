@@ -130,7 +130,7 @@ void TaskSystemExecutor::reschedule() {
 			threadFinished(tasks[next], next);
 			scheduled.pop_front();
 			tasks[next].state.store(TaskState::Finished);
-			next = scheduled.front();
+			if(!scheduled.empty()) next = scheduled.front();
 		}
 		if (scheduled.empty()) return;
 		TaskID prev;
@@ -156,7 +156,7 @@ void TaskSystemExecutor::reschedule() {
 			   tasks[next].doNotSchedule.test(std::memory_order_relaxed)) {
 			threadFinished(tasks[next], next);
 			scheduled.pop_front();
-			next = scheduled.front();
+			if(!scheduled.empty()) next = scheduled.front();
 		}
 		if (scheduled.empty()) break;
 		TaskID expected = -1;
@@ -180,7 +180,7 @@ void TaskSystemExecutor::reschedule() {
 void TaskSystemExecutor::threadFinished(TaskData &info, TaskID taskID) {
 	int res;
 	if ((res = info.finished.fetch_add(1, std::memory_order_relaxed)) >= this->threadCount - 1) {
-		if (res > this->threadCount - 1) printf("verry bad !!!!!!!!!!!!!!\n");
+		assert(res <= this->threadCount - 1);
 		TaskCallback callback = info.callback.load(std::memory_order_relaxed);
 		if (callback) callback(taskID);
 		info.state.store(TaskState::Finished, std::memory_order_relaxed);
@@ -238,7 +238,7 @@ TaskSystemExecutor::TaskSystemExecutor(int threadCount, bool gui)
 			Executor::ExecStatus res = info.exec->ExecuteStep(threadID, this->threadCount);
 
 			if (res == Executor::ExecStatus::ES_Stop) {
-				std::lock_guard lock(rescheduleMtx);
+				//std::lock_guard lock(rescheduleMtx); // TODO: if something breaks, uncomment
 				info.executingCount.fetch_add(-1, std::memory_order_relaxed);
 				info.doNotSchedule.test_and_set(std::memory_order_relaxed);
 				if (executing[threadID].compare_exchange_strong(execID, -1, std::memory_order_acq_rel)) {

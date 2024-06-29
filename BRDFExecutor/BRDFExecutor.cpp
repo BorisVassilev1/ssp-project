@@ -10,6 +10,7 @@
 #include <TaskSystem.h>
 
 struct BRDFBuilder : TaskSystem::Executor {
+	using uint = unsigned int;
 	ImageData		 image;
 	std::mutex		 initMutex;
 	std::vector<int> perThreadProgress;
