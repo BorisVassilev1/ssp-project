@@ -1,6 +1,12 @@
 [submodule "RaytracerExecutor/urban-spork"]
-	path = RaytracerExecutor/urban-spork
+	path = libs/urban-spork
 	url = git@github.com:BorisVassilev1/urban-spork.git
 [submodule "BRDFExecutor/glm"]
-	path = BRDFExecutor/glm
+	path = libs/glm
 	url = git@github.com:g-truc/glm.git
+[submodule "libs/imgui"]
+	path = libs/imgui
+	url = git@github.com:ocornut/imgui.git
+[submodule "libs/glfw"]
+	path = libs/glfw
+	url = git@github.com:glfw/glfw.git
