@@ -1,13 +1,14 @@
 #include "TaskSystem.h"
+#include "Window.hpp"
+#include "imgui.h"
 
-#include <imgui.h>
-#include <imgui_impl_glfw.h>
-#include <imgui_impl_opengl3.h>
-#include <GLFW/glfw3.h>
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
+#include <ctime>
+#include <thread>
 
 #if defined(_WIN32) || defined(_WIN64)
 	#define USE_WIN
@@ -17,10 +18,6 @@
 #else
 	#include <dlfcn.h>
 #endif
-
-static void glfw_error_callback(int error, const char *description) {
-	fprintf(stderr, "GLFW Error %d: %s\n", error, description);
-}
 
 namespace TaskSystem {
 
@@ -60,23 +57,29 @@ TaskSystemExecutor::TaskID TaskSystemExecutor::ScheduleTask(std::unique_ptr<Task
 	{
 		std::lock_guard lock(rescheduleMtx);
 		addTaskLock.lock();
-		res = tasks.add(std::move(data));
+		res			  = tasks.add(std::move(data));
+		tasks[res].id = res;
 		addTaskLock.unlock();
 
 		if (priority > current_priority) {
 			for (int i = 0; i < threadCount; ++i) {
-				auto current = executing[i].load(std::memory_order_relaxed);
+				auto current = executing[i].exchange(res, std::memory_order_relaxed);
 				if (current != -1) {
 					tasks[current].state.store(TaskState::Waiting, std::memory_order_relaxed);
 					waiting.push(current);
 				}
-				executing[i].store(res, std::memory_order_relaxed);
+			}
+			while (!scheduled.empty()) {
+				TaskID task = scheduled.front();
+				scheduled.pop_front();
+				waiting.push(task);
 			}
 			tasks[res].state.store(TaskState::Executing, std::memory_order_relaxed);
+			tasks[res].executingCount.store(threadCount, std::memory_order_relaxed);
 			current_priority = priority;
 		} else if (priority == current_priority) {
 			for (int i = 0; i < threadCount; ++i)
-				scheduled.push(res);
+				scheduled.push_back(res);
 			tasks[res].state.store(TaskState::Scheduled, std::memory_order_relaxed);
 		} else {
 			for (int i = 0; i < threadCount; ++i)
@@ -84,6 +87,8 @@ TaskSystemExecutor::TaskID TaskSystemExecutor::ScheduleTask(std::unique_ptr<Task
 			tasks[res].state.store(TaskState::Waiting, std::memory_order_relaxed);
 		}
 	}
+
+	rescheduleCndVar.notify_all();
 	if (!working) {
 		working = true;
 		workCndVar.notify_all();
@@ -97,8 +102,9 @@ void TaskSystemExecutor::reschedule() {
 		int workingCount = 0;
 		for (int i = 0; i < threadCount; ++i) {
 			workingCount += executing[i].load(std::memory_order_relaxed) != -1;
-			if (workingCount > 0) return;
 		}
+		if (workingCount == threadCount) return;
+		// proceed only if there are starving threads
 
 		if (waiting.empty()) {
 			working = false;
@@ -108,11 +114,10 @@ void TaskSystemExecutor::reschedule() {
 		int priority = tasks[waiting.top()].priority;
 		while (!waiting.empty() && tasks[waiting.top()].priority == priority) {
 			TaskID task = waiting.top();
-			scheduled.push(task);
+			scheduled.push_back(task);
 			tasks[task].state.store(TaskState::Scheduled, std::memory_order_relaxed);
 			waiting.pop();
 		}
-
 		current_priority = priority;
 	}
 
@@ -120,40 +125,100 @@ void TaskSystemExecutor::reschedule() {
 	// execution across threads and tasks
 	{
 		TaskID next = scheduled.front();
-		while (!scheduled.empty() && tasks[next].finished.test(std::memory_order_relaxed)) {
-			scheduled.pop();
+		// filter out already finished threads
+		while (!scheduled.empty() && tasks[next].doNotSchedule.test(std::memory_order_relaxed)) {
+			threadFinished(tasks[next], next);
+			scheduled.pop_front();
+			tasks[next].state.store(TaskState::Finished);
 			next = scheduled.front();
 		}
-		if (!scheduled.empty()) {
-			TaskID prev;
-			while (executing[reschedule_idx].load(std::memory_order_relaxed) == next) {
-				++reschedule_idx;
-				reschedule_idx %= threadCount;
-			}
-			prev = executing[reschedule_idx].exchange(next);
-			tasks[next].state.store(TaskState::Executing, std::memory_order_relaxed);
-			scheduled.pop();
-			if (prev != -1) {
-				scheduled.push(prev);
-				tasks[prev].state.store(TaskState::Scheduled, std::memory_order_relaxed);
-				++reschedule_idx;
-				reschedule_idx %= threadCount;
-			}
+		if (scheduled.empty()) return;
+		TaskID prev;
+		while (executing[reschedule_idx].load(std::memory_order_relaxed) == next) {
+			++reschedule_idx;
+			reschedule_idx %= threadCount;
+		}
+		prev = executing[reschedule_idx].exchange(next);
+		tasks[next].executingCount.fetch_add(1, std::memory_order_relaxed);
+		scheduled.pop_front();
+		if (prev != -1) {
+			scheduled.push_back(prev);
+			tasks[prev].executingCount.fetch_add(-1, std::memory_order_relaxed);
+			++reschedule_idx;
+			reschedule_idx %= threadCount;
 		}
 	}
+
 	// find idling threads and assign them work
 	for (int i = 0; i < threadCount && !scheduled.empty(); ++i) {
-		TaskID next		= scheduled.front();
+		TaskID next = scheduled.front();
+		while (!scheduled.empty() && tasks[next].executingCount.load(std::memory_order_relaxed) == 0 &&
+			   tasks[next].doNotSchedule.test(std::memory_order_relaxed)) {
+			threadFinished(tasks[next], next);
+			scheduled.pop_front();
+			next = scheduled.front();
+		}
+		if (scheduled.empty()) break;
 		TaskID expected = -1;
 		if (executing[i].compare_exchange_strong(expected, next, std::memory_order_relaxed)) {
-			tasks[next].state.store(TaskState::Executing, std::memory_order_relaxed);
-			scheduled.pop();
+			tasks[next].executingCount.fetch_add(1, std::memory_order_relaxed);
+			scheduled.pop_front();
+		}
+	}
+
+	for (TaskID id : scheduled) {
+		if (tasks[id].executingCount.load(std::memory_order_relaxed) > 0) {
+			tasks[id].state.store(TaskState::Executing);
+		} else {
+			if (tasks[id].finished.load(std::memory_order_relaxed) == threadCount)
+				tasks[id].state.store(TaskState::Finished);
+			else tasks[id].state.store(TaskState::Scheduled);
 		}
 	}
 }
 
-TaskSystemExecutor::TaskSystemExecutor(int threadCount)
-	: threadCount(threadCount), executing(threadCount), waiting(taskCmp) {
+void TaskSystemExecutor::threadFinished(TaskData &info, TaskID taskID) {
+	int res;
+	if ((res = info.finished.fetch_add(1, std::memory_order_relaxed)) >= this->threadCount - 1) {
+		if (res > this->threadCount - 1) printf("verry bad !!!!!!!!!!!!!!\n");
+		TaskCallback callback = info.callback.load(std::memory_order_relaxed);
+		if (callback) callback(taskID);
+		info.state.store(TaskState::Finished, std::memory_order_relaxed);
+		info.done.notify_all();
+	}
+}
+
+void TaskSystemExecutor::drawGui() {
+	ImGui::SetNextWindowPos(ImVec2(0, 0));
+	ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
+	ImGui::Begin("a", NULL,
+				 ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDecoration);
+	{
+		ImColor defaultText = ImGui::GetStyle().Colors[ImGuiCol_Text];
+		for (int i = 0; i < this->threadCount; ++i) {
+			int			k							  = executing[i].load(std::memory_order_relaxed);
+			std::string s							  = "task " + std::to_string(k);
+			ImColor		col							  = ImColor::HSV((k % 5) / 10., 1, k != -1);
+			ImGui::GetStyle().Colors[ImGuiCol_Button] = col;
+			ImGui::GetStyle().Colors[ImGuiCol_Text] = ImColor(1.f - col.Value.x, 1.f - col.Value.y, 1.f - col.Value.z);
+			if (i) ImGui::SameLine();
+			ImGui::Button(s.c_str(), ImVec2(60, 60));
+		}
+		ImGui::GetStyle().Colors[ImGuiCol_Text] = defaultText;
+		ImGui::Text("tasks:");
+
+		for (auto &ptr : tasks) {
+			if (ptr == nullptr) continue;
+			const char *state = TaskSystemExecutor::TaskStateString(ptr->state.load());
+			ImGui::Text("task %2zu, priority %4d, status %s", ptr->id, ptr->priority, state);
+		}
+		ImGui::Text("\nscheduled: %zu\nwaiting: %zu", scheduled.size(), waiting.size());
+	}
+	ImGui::End();
+}
+
+TaskSystemExecutor::TaskSystemExecutor(int threadCount, bool gui)
+	: threadCount(threadCount), executing(threadCount), waiting(taskCmp), gui(gui) {
 	worker = [this](int threadID) -> void {
 		while (running) {
 			if (!working) {
@@ -163,7 +228,7 @@ TaskSystemExecutor::TaskSystemExecutor(int threadCount)
 
 			auto execID = executing[threadID].load(std::memory_order_relaxed);
 			if (execID == -1) {
-				//std::this_thread::yield();
+				std::this_thread::yield();
 				continue;
 			}
 
@@ -173,75 +238,39 @@ TaskSystemExecutor::TaskSystemExecutor(int threadCount)
 			Executor::ExecStatus res = info.exec->ExecuteStep(threadID, this->threadCount);
 
 			if (res == Executor::ExecStatus::ES_Stop) {
-				if (!info.finished.test_and_set(std::memory_order_relaxed)) {
-					info.state.store(TaskState::Finished, std::memory_order_relaxed);
-					TaskCallback callback = info.callback.load(std::memory_order_relaxed);
-					if (callback) callback(execID);
-					info.done.notify_all();
-					rescheduleCndVar.notify_all();
+				std::lock_guard lock(rescheduleMtx);
+				info.executingCount.fetch_add(-1, std::memory_order_relaxed);
+				info.doNotSchedule.test_and_set(std::memory_order_relaxed);
+				if (executing[threadID].compare_exchange_strong(execID, -1, std::memory_order_acq_rel)) {
+					threadFinished(info, execID);
 				}
-				executing[threadID].compare_exchange_strong(execID, -1, std::memory_order_release);
-				//std::this_thread::yield();
+
+				rescheduleCndVar.notify_all();
+				std::this_thread::yield();
 			}
 		}
 	};
 
 	scheduler = [this] {
-		glfwSetErrorCallback(glfw_error_callback);
-		if (!glfwInit()) return;
-		GLFWwindow *window = glfwCreateWindow(100, 60 * this->threadCount + 50, "Scheduler GUI", nullptr, nullptr);
-		if (window == nullptr) return;
-		glfwMakeContextCurrent(window);
+		Window *window = nullptr;
+		if (this->gui) window = new Window(70 * this->threadCount + 10, 250, "Scheduler GUI");
+		int waitTime = std::ceil(200. / this->threadCount);
 
-		IMGUI_CHECKVERSION();
-		ImGui::CreateContext();
-		ImGuiIO &io = ImGui::GetIO();
-		(void)io;
-		ImGui_ImplGlfw_InitForOpenGL(window, true);
-		ImGui_ImplOpenGL3_Init("#version 130");
+		while (running || (this->gui && !window->shouldClose())) {
+			if (this->gui) window->BeginFrame();
 
-		ImFontConfig cfg;
-		cfg.SizePixels = 100.f;
-		ImFont *f	   = io.Fonts->AddFontDefault();
-
-		while (running) {
-			glfwPollEvents();
-
-			// Start the Dear ImGui frame
-			ImGui_ImplOpenGL3_NewFrame();
-			ImGui_ImplGlfw_NewFrame();
-			ImGui::NewFrame();
 			{
 				std::unique_lock lock(rescheduleMtx);
-				rescheduleCndVar.wait_for(lock, std::chrono::milliseconds(33));
-				// printf("%ld %ld %ld %ld\n", executing[0].load(), executing[1].load(), executing[2].load(),
-				//	   executing[3].load());
-
+				rescheduleCndVar.wait_for(lock, std::chrono::milliseconds(waitTime));
 				reschedule();
 			}
-			ImGui::SetNextWindowPos(ImVec2(0, 0));
-			ImGui::SetNextWindowSize(io.DisplaySize);
-			ImGui::Begin("Scheduler");
-			ImGui::PushFont(f);
-			{
-				for (int i = 0; i < this->threadCount; ++i) {
-					// ImGui::Text("thread %d:  %ld", i, executing[i].load(std::memory_order_relaxed));
-					int			k							  = executing[i].load(std::memory_order_relaxed);
-					std::string s							  = "task " + std::to_string(k);
-					ImColor		col							  = ImColor::HSV((k % 5) / 10., 1, k != -1);
-					ImGui::GetStyle().Colors[ImGuiCol_Button] = col;
-					ImGui::GetStyle().Colors[ImGuiCol_Text] =
-						ImColor(1.f - col.Value.x, 1.f - col.Value.y, 1.f - col.Value.z);
-					ImGui::Button(s.c_str(), ImVec2(60, 60));
-				}
-			}
-			ImGui::PopFont();
-			ImGui::End();
 
-			ImGui::Render();
-			ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-			glfwSwapBuffers(window);
+			if (this->gui) {
+				drawGui();
+				window->SwapBuffers();
+			}
 		}
+		delete[] window;
 	};
 
 	running = true;
@@ -262,7 +291,7 @@ TaskSystemExecutor::~TaskSystemExecutor() {
 }
 
 void TaskSystemExecutor::OnTaskCompleted(TaskID task, TaskCallback callback) {
-	if (tasks[task].finished.test(std::memory_order_relaxed)) {
+	if (tasks[task].state.load(std::memory_order_relaxed) == TaskState::Finished) {
 		callback(task);
 		return;
 	}
@@ -271,7 +300,7 @@ void TaskSystemExecutor::OnTaskCompleted(TaskID task, TaskCallback callback) {
 
 void TaskSystemExecutor::TaskData::waitDone() {
 	std::unique_lock lock(mtx);
-	done.wait(lock, [this] { return finished.test(std::memory_order_relaxed); });
+	done.wait(lock, [this] { return state.load(std::memory_order_relaxed) == TaskState::Finished; });
 }
 
 };	   // namespace TaskSystem

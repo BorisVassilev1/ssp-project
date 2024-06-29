@@ -66,14 +66,18 @@ void testRenderer() {
 
 	TaskSystemExecutor::TaskID id1 = ts.ScheduleTask(std::move(task1), 100);
 	TaskSystemExecutor::TaskID id2 = ts.ScheduleTask(std::move(task2), 100);
-	TaskSystemExecutor::TaskID id3 = ts.ScheduleTask(std::move(task3), 100);
+	//TaskSystemExecutor::TaskID id3 = ts.ScheduleTask(std::move(task3), 100);
 
 	ts.OnTaskCompleted(id1, [](TaskSystemExecutor::TaskID id) { printf("Render 1 finished\n"); });
 	ts.OnTaskCompleted(id2, [](TaskSystemExecutor::TaskID id) { printf("Render 2 finished\n"); });
-	ts.OnTaskCompleted(id3, [](TaskSystemExecutor::TaskID id) { printf("Render 3 finished\n"); });
+	//ts.OnTaskCompleted(id3, [](TaskSystemExecutor::TaskID id) { printf("Render 3 finished\n"); });
+	
 	ts.WaitForTask(id1);
 	ts.WaitForTask(id2);
-	ts.WaitForTask(id3);
+
+	ts.DestroyTask(id1);
+	ts.DestroyTask(id2);
+	//ts.WaitForTask(id3);
 }
 
 void testPrinter() {
@@ -104,6 +108,7 @@ void testPrinter() {
 	ts.WaitForTask(id3);
 	ts.WaitForTask(id4);
 }
+
 TaskSystemExecutor::TaskID testBRDF() {
 	TaskSystemExecutor &ts		  = TaskSystemExecutor::GetInstance();
 	const bool			libLoaded = ts.LoadLibrary("BRDFExecutor"_lib);
@@ -117,7 +122,15 @@ TaskSystemExecutor::TaskID testBRDF() {
 }
 
 int main(int argc, char *argv[]) {
-	TaskSystemExecutor::Init(6);
+	int threads;
+
+	if(argc == 1) {
+		threads = 0;
+	} else {
+		threads = std::stoi(argv[1]);
+	}
+
+	TaskSystemExecutor::Init(threads, argc > 2);
 
 	auto id = testBRDF();
 	testRenderer();

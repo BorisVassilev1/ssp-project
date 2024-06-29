@@ -7,7 +7,12 @@ SET(PLUGIN_INSTALL_PATH "${CMAKE_BINARY_DIR}/../ts_executors" CACHE STRING "Path
 
 SET(CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} -g)
 
+
 add_subdirectory(TaskSystem)
 add_subdirectory(PrinterExecutor)
 add_subdirectory(RaytracerExecutor)
 add_subdirectory(BRDFExecutor)
+
+#target_compile_options(TaskSystem PUBLIC -g -fsanitize=address)
+#target_link_options(TaskSystem PUBLIC -g -fsanitize=address)
+

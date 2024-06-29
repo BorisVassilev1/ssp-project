@@ -2,8 +2,10 @@
 
 #include "Task.h"
 #include "Executor.h"
+#include "Utils.hpp"
 
 #include <atomic>
+#include <cassert>
 #include <climits>
 #include <condition_variable>
 #include <map>
@@ -12,7 +14,6 @@
 #include <mutex>
 #include <queue>
 #include <thread>
-#include <chrono>
 
 inline std::string operator""_lib(const char *str, std::size_t size) {
 #if defined(_WIN32) || defined(_WIN64)
@@ -26,58 +27,13 @@ inline std::string operator""_lib(const char *str, std::size_t size) {
 
 namespace TaskSystem {
 
-template <class T>
-class Pool {
-	std::vector<std::unique_ptr<T>> pool;
-	std::queue<int>					free;
-
-   public:
-	std::size_t add(std::unique_ptr<T> obj) {
-		if (free.empty()) {
-			pool.push_back(std::move(obj));
-			return pool.size() - 1;
-		} else {
-			auto i	= free.front();
-			pool[i] = std::move(obj);
-			free.pop();
-			return i;
-		}
-	}
-
-	void remove(std::size_t id) {
-		pool[id] = std::move(nullptr);	   // TODO: remove this
-		free.push(id);
-	}
-
-	T &operator[](std::size_t id) { return *pool[id]; }
-};
-
-struct SpinLock {
-	std::atomic_flag flag;
-	void			 lock() {
-		while (flag.test_and_set())
-			;
-	}
-
-	void unlock() { flag.clear(); }
-
-	bool tryLock() { return !flag.test_and_set(); }
-};
-
 /**
  * @brief The task system main class that can accept tasks to be scheduled and execute them on multiple threads
  *
  */
 struct TaskSystemExecutor {
    private:
-	TaskSystemExecutor(int threadCount);
-
-	~TaskSystemExecutor();
-
-	std::function<void(int)>  worker;
-	std::function<void(void)> scheduler;
-
-	void reschedule();
+	class TaskData;
 
    public:
 	using TaskID	   = std::size_t;
@@ -90,6 +46,20 @@ struct TaskSystemExecutor {
 		Unknown,
 	};
 
+   private:
+	TaskSystemExecutor(int threadCount, bool gui = false);
+
+	~TaskSystemExecutor();
+
+	std::function<void(int)>  worker;
+	std::function<void(void)> scheduler;
+
+	void reschedule();
+	void threadFinished(TaskData &info, TaskID taskID);
+
+	void drawGui();
+
+   public:
 	TaskSystemExecutor(const TaskSystemExecutor &)			  = delete;
 	TaskSystemExecutor &operator=(const TaskSystemExecutor &) = delete;
 
@@ -98,11 +68,19 @@ struct TaskSystemExecutor {
 	/**
 	 * @brief Initialisation called once by the main application to allocate needed resources and start threads
 	 *
-	 * @param threadCount the desired number of threads to utilize
+	 * @param threadCount the desired number of threads to utilize. If zero, uses defaults to 
+	 * the core count of the machine.
 	 */
-	static void Init(int threadCount) {
+	static void Init(int threadCount = 0, bool gui = false) {
 		delete self;
-		self = new TaskSystemExecutor(threadCount);
+		if(threadCount == 0) 
+			threadCount = std::thread::hardware_concurrency();
+		self = new TaskSystemExecutor(threadCount, gui);
+	}
+
+	static const char *TaskStateString(TaskState s) {
+		static const char *names[] = {"Waiting", "Executing", "Scheduled", "Finished", "Unknown"};
+		return names[int(s)];
 	}
 
 	/**
@@ -166,15 +144,24 @@ struct TaskSystemExecutor {
 		executorConstructors[executorName] = constructor;
 	}
 
+	void DestroyTask(TaskID task) {
+		assert(tasks[task].state.load(std::memory_order_relaxed) == TaskState::Finished);
+		std::lock_guard lock(addTaskLock);
+		tasks.remove(task);
+	}
+
    private:
 	struct TaskData {
 		std::unique_ptr<Executor> exec;
-		std::atomic<TaskState>	  state	   = TaskState::Unknown;
-		std::atomic_flag		  finished = false;
+		std::atomic<TaskState>	  state			 = TaskState::Unknown;
+		std::atomic_flag		  doNotSchedule	 = false;
+		std::atomic<int>		  finished		 = 0;
+		std::atomic<int>		  executingCount = 0;
 		std::condition_variable	  done;
 		std::mutex				  mtx;
 		std::atomic<TaskCallback> callback;
 		int						  priority;
+		TaskID					  id;
 
 		TaskData(std::unique_ptr<Executor> exec, TaskState state, int priority)
 			: exec(std::move(exec)), state(state), callback([](TaskID) {}), priority(priority) {}
@@ -200,13 +187,14 @@ struct TaskSystemExecutor {
 	std::function<bool(TaskID, TaskID)> taskCmp = [this](TaskID t1, TaskID t2) -> bool {
 		return tasks[t1].priority < tasks[t2].priority;
 	};
-	std::queue<TaskID>																	  scheduled;
+	std::deque<TaskID>																	  scheduled;
 	std::priority_queue<TaskID, std::vector<TaskID>, std::function<bool(TaskID, TaskID)>> waiting;
 	int																					  current_priority = INT_MIN;
 
 	volatile bool working = false;
 	volatile bool running = false;
-	int			  threadCount;
+	const int	  threadCount;
+	const bool	  gui;
 
 	int reschedule_idx = 0;
 };
