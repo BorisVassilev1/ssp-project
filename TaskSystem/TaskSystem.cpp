@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdio>
 #include <ctime>
+#include <random>
 #include <thread>
 
 #if defined(_WIN32) || defined(_WIN64)
@@ -56,16 +57,17 @@ TaskSystemExecutor::TaskID TaskSystemExecutor::ScheduleTask(std::unique_ptr<Task
 	TaskID					  res;
 	{
 		std::lock_guard lock(rescheduleMtx);
-		addTaskLock.lock();
+		addTaskLock.lockWrite();
 		res			  = tasks.add(std::move(data));
 		tasks[res].id = res;
-		addTaskLock.unlock();
+		addTaskLock.unlockWrite();
 
 		if (priority > current_priority) {
 			for (int i = 0; i < threadCount; ++i) {
 				auto current = executing[i].exchange(res, std::memory_order_relaxed);
 				if (current != -1) {
 					tasks[current].state.store(TaskState::Waiting, std::memory_order_relaxed);
+					tasks[current].executingCount.fetch_add(-1, std::memory_order_relaxed);
 					waiting.push(current);
 				}
 			}
@@ -78,13 +80,13 @@ TaskSystemExecutor::TaskID TaskSystemExecutor::ScheduleTask(std::unique_ptr<Task
 			tasks[res].executingCount.store(threadCount, std::memory_order_relaxed);
 			current_priority = priority;
 		} else if (priority == current_priority) {
+			tasks[res].state.store(TaskState::Scheduled, std::memory_order_seq_cst);
 			for (int i = 0; i < threadCount; ++i)
 				scheduled.push_back(res);
-			tasks[res].state.store(TaskState::Scheduled, std::memory_order_relaxed);
 		} else {
+			tasks[res].state.store(TaskState::Waiting, std::memory_order_seq_cst);
 			for (int i = 0; i < threadCount; ++i)
 				waiting.push(res);
-			tasks[res].state.store(TaskState::Waiting, std::memory_order_relaxed);
 		}
 	}
 
@@ -114,12 +116,8 @@ void TaskSystemExecutor::reschedule() {
 		int priority = tasks[waiting.top()].priority;
 		while (!waiting.empty() && tasks[waiting.top()].priority == priority) {
 			TaskID task = waiting.top();
-			if(tasks[task].doNotSchedule.test(std::memory_order_relaxed)) {
-				threadFinished(tasks[task], task);
-			} else {
-				scheduled.push_back(task);
-				tasks[task].state.store(TaskState::Scheduled, std::memory_order_relaxed);
-			}
+			scheduled.push_back(task);
+			tasks[task].state.store(TaskState::Scheduled, std::memory_order_relaxed);
 			waiting.pop();
 		}
 		current_priority = priority;
@@ -133,7 +131,7 @@ void TaskSystemExecutor::reschedule() {
 		while (!scheduled.empty() && tasks[next].doNotSchedule.test(std::memory_order_relaxed)) {
 			threadFinished(tasks[next], next);
 			scheduled.pop_front();
-			if(!scheduled.empty()) next = scheduled.front();
+			if (!scheduled.empty()) next = scheduled.front();
 		}
 		if (scheduled.empty()) return;
 		TaskID prev;
@@ -141,7 +139,7 @@ void TaskSystemExecutor::reschedule() {
 			++reschedule_idx;
 			reschedule_idx %= threadCount;
 		}
-		prev = executing[reschedule_idx].exchange(next);
+		prev = executing[reschedule_idx].exchange(next, std::memory_order_relaxed);
 		tasks[next].executingCount.fetch_add(1, std::memory_order_relaxed);
 		scheduled.pop_front();
 		if (prev != -1) {
@@ -155,11 +153,10 @@ void TaskSystemExecutor::reschedule() {
 	// find idling threads and assign them work
 	for (int i = 0; i < threadCount && !scheduled.empty(); ++i) {
 		TaskID next = scheduled.front();
-		while (!scheduled.empty() &&
-			   tasks[next].doNotSchedule.test(std::memory_order_relaxed)) {
+		while (!scheduled.empty() && tasks[next].doNotSchedule.test(std::memory_order_relaxed)) {
 			threadFinished(tasks[next], next);
 			scheduled.pop_front();
-			if(!scheduled.empty()) next = scheduled.front();
+			if (!scheduled.empty()) next = scheduled.front();
 		}
 		if (scheduled.empty()) break;
 		TaskID expected = -1;
@@ -174,20 +171,19 @@ void TaskSystemExecutor::reschedule() {
 			tasks[id].state.store(TaskState::Executing);
 		} else {
 			if (tasks[id].finished.load(std::memory_order_relaxed) == threadCount) {
-				//tasks[id].state.store(TaskState::Finished);
-			}
-			else tasks[id].state.store(TaskState::Scheduled);
+				tasks[id].state.store(TaskState::Finished);
+			} else tasks[id].state.store(TaskState::Scheduled);
 		}
 	}
 }
 
 void TaskSystemExecutor::threadFinished(TaskData &info, TaskID taskID) {
 	int res;
-	if ((res = info.finished.fetch_add(1, std::memory_order_relaxed)) >= this->threadCount - 1) {
+	if ((res = info.finished.fetch_add(1, std::memory_order_seq_cst)) >= this->threadCount - 1) {
 		assert(res <= this->threadCount - 1);
 		TaskCallback callback = info.callback.load(std::memory_order_relaxed);
 		if (callback) callback(taskID);
-		TaskState prev = info.state.exchange(TaskState::Finished, std::memory_order_relaxed);
+		TaskState prev = info.state.exchange(TaskState::Finished, std::memory_order_seq_cst);
 		assert(prev != TaskState::Finished);
 		info.done.notify_all();
 	}
@@ -231,23 +227,21 @@ TaskSystemExecutor::TaskSystemExecutor(int threadCount, bool gui)
 				workCndVar.wait_for(lock, std::chrono::milliseconds(500), [this] { return working; });
 			}
 
-			auto execID = executing[threadID].load(std::memory_order_relaxed);
+			auto execID = executing[threadID].load(std::memory_order_seq_cst);
 			if (execID == -1) {
 				std::this_thread::yield();
 				continue;
 			}
 
-			addTaskLock.lock();
+			addTaskLock.lockRead();
 			TaskData &info = tasks[execID];
-			assert(info.state.load() != TaskState::Finished);
-			addTaskLock.unlock();
+			// assert(info.state.load() != TaskState::Finished);
+			addTaskLock.unlockRead();
 			Executor::ExecStatus res = info.exec->ExecuteStep(threadID, this->threadCount);
 
 			if (res == Executor::ExecStatus::ES_Stop) {
-				//std::lock_guard lock(rescheduleMtx); // TODO: if something breaks, uncomment
-				//printf("TASK %zu FINISH %d\n", execID, threadID);
 				info.doNotSchedule.test_and_set(std::memory_order_relaxed);
-				if (executing[threadID].compare_exchange_strong(execID, -1, std::memory_order_acq_rel)) {
+				if (executing[threadID].compare_exchange_strong(execID, -1, std::memory_order_seq_cst)) {
 					info.executingCount.fetch_add(-1, std::memory_order_relaxed);
 					threadFinished(info, execID);
 				}
@@ -307,7 +301,7 @@ void TaskSystemExecutor::OnTaskCompleted(TaskID task, TaskCallback callback) {
 
 void TaskSystemExecutor::TaskData::waitDone() {
 	std::unique_lock lock(mtx);
-	done.wait(lock, [this] { return state.load(std::memory_order_relaxed) == TaskState::Finished;});
+	done.wait(lock, [this] { return state.load(std::memory_order_relaxed) == TaskState::Finished; });
 }
 
 };	   // namespace TaskSystem

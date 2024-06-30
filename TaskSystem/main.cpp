@@ -62,22 +62,23 @@ void testRenderer() {
 	assert(libLoaded);
 	std::unique_ptr<Task> task1 = std::make_unique<RaytracerParams>("HeavyMesh");
 	std::unique_ptr<Task> task2 = std::make_unique<RaytracerParams>("ManySimpleMeshes");
-	//std::unique_ptr<Task> task3 = std::make_unique<RaytracerParams>("ManyHeavyMeshes");
+	// std::unique_ptr<Task> task3 = std::make_unique<RaytracerParams>("ManyHeavyMeshes");
 
 	TaskSystemExecutor::TaskID id1 = ts.ScheduleTask(std::move(task1), 100);
 	TaskSystemExecutor::TaskID id2 = ts.ScheduleTask(std::move(task2), 100);
-	//TaskSystemExecutor::TaskID id3 = ts.ScheduleTask(std::move(task3), 100);
+	// TaskSystemExecutor::TaskID id3 = ts.ScheduleTask(std::move(task3), 100);
 
 	ts.OnTaskCompleted(id1, [](TaskSystemExecutor::TaskID id) { printf("Render 1 finished\n"); });
 	ts.OnTaskCompleted(id2, [](TaskSystemExecutor::TaskID id) { printf("Render 2 finished\n"); });
-	//ts.OnTaskCompleted(id3, [](TaskSystemExecutor::TaskID id) { printf("Render 3 finished\n"); });
-	
+	// ts.OnTaskCompleted(id3, [](TaskSystemExecutor::TaskID id) { printf("Render 3 finished\n"); });
+
 	ts.WaitForTask(id1);
 	ts.WaitForTask(id2);
 
 	ts.DestroyTask(id1);
 	ts.DestroyTask(id2);
-	//ts.WaitForTask(id3);
+
+	// ts.WaitForTask(id3);
 }
 
 void testPrinter() {
@@ -100,13 +101,17 @@ void testPrinter() {
 	TaskSystemExecutor::TaskID id3 = ts.ScheduleTask(std::move(p3), 20);
 	TaskSystemExecutor::TaskID id4 = ts.ScheduleTask(std::move(p4), 20);
 
-
 	ts.OnTaskCompleted(id1, [](TaskSystemExecutor::TaskID id) { printf("Task 1 finished\n"); });
 	ts.OnTaskCompleted(id2, [](TaskSystemExecutor::TaskID id) { printf("Task 2 finished\n"); });
 	ts.WaitForTask(id1);
 	ts.WaitForTask(id2);
 	ts.WaitForTask(id3);
 	ts.WaitForTask(id4);
+
+	ts.DestroyTask(id1);
+	ts.DestroyTask(id2);
+	ts.DestroyTask(id3);
+	ts.DestroyTask(id4);
 }
 
 TaskSystemExecutor::TaskID testBRDF() {
@@ -124,7 +129,7 @@ TaskSystemExecutor::TaskID testBRDF() {
 int main(int argc, char *argv[]) {
 	int threads;
 
-	if(argc == 1) {
+	if (argc == 1) {
 		threads = 0;
 	} else {
 		threads = std::stoi(argv[1]);
@@ -132,11 +137,14 @@ int main(int argc, char *argv[]) {
 
 	TaskSystemExecutor::Init(threads, argc > 2);
 
-	auto id = testBRDF();
-	testRenderer();
+	for (int i = 0; i < 10; ++i) {
+		auto id = testBRDF();
+		testRenderer();
 
-	testPrinter();
-	TaskSystemExecutor::GetInstance().WaitForTask(id);
+		testPrinter();
+		TaskSystemExecutor::GetInstance().WaitForTask(id);
+		TaskSystemExecutor::GetInstance().DestroyTask(id);
+	}
 
 	TaskSystemExecutor::Shutdown();
 	return 0;

@@ -77,13 +77,17 @@ struct TaskSystemExecutor {
 		self = new TaskSystemExecutor(threadCount, gui);
 	}
 
+	/**
+	 * @brief converts TaskState to string.
+	 */
 	static const char *TaskStateString(TaskState s) {
 		static const char *names[] = {"Waiting", "Executing", "Scheduled", "Finished", "Unknown"};
 		return names[int(s)];
 	}
 
 	/**
-	 * @brief Cleanup, must be called once by the main application to deallocate needed resources and stop all threads
+	 * @brief Cleanup, must be called once by the main application to deallocate needed resources and stop all threads.
+	 * Calling this before waiting for all tasks to complete is undefined behaviour
 	 *
 	 */
 	static void Shutdown() { delete self; }
@@ -150,8 +154,9 @@ struct TaskSystemExecutor {
 	void DestroyTask(TaskID task) {
 		assert(tasks[task].state.load(std::memory_order_relaxed) == TaskState::Finished);
 		assert(tasks[task].finished.load(std::memory_order_relaxed) == threadCount);
-		std::lock_guard lock(addTaskLock);
+		addTaskLock.lockWrite();
 		tasks.remove(task);
+		addTaskLock.unlockWrite();
 	}
 
    private:
@@ -182,7 +187,7 @@ struct TaskSystemExecutor {
 	std::condition_variable rescheduleCndVar;
 	std::mutex				rescheduleMtx;
 
-	SpinLock addTaskLock;
+	RWSpinLock addTaskLock;
 
 	Pool<TaskData>					 tasks;
 	std::vector<std::thread>		 threads;

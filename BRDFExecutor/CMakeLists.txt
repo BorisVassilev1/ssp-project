@@ -2,6 +2,16 @@ project(BRDFExecutor)
 
 set (CMAKE_CXX_STANDARD 17)
 
+if (NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../libs/glm/CMakeLists.txt)
+    message(WARNING "glm not initialized, skipping")
+    return()
+endif()
+
+if (NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../libs/urban-spork/CMakeLists.txt)
+    message(WARNING "Raytracer not initialized, skipping")
+    return()
+endif()
+
 set(SOURCES
 	BRDFExecutor.cpp
 )

@@ -1,6 +1,15 @@
 project(TaskSystem)
 
 set (CMAKE_CXX_STANDARD 20)
+if (NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../libs/glfw/CMakeLists.txt)
+    message(WARNING "glfw not initialized, skipping")
+    return()
+endif()
+
+if (NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../libs/imgui/imgui.h)
+    message(WARNING "imgui not initialized, skipping")
+    return()
+endif()
 
 set(SOURCES
     TaskSystem.cpp
