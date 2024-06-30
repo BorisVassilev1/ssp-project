@@ -10,10 +10,14 @@ static void glfw_error_callback(int error, const char *description) {
 }
 
 namespace TaskSystem {
+
+/**
+ * @brief A simple Window class that closes when ESCAPE is pressed
+ */
 class Window {
 	GLFWwindow *window;
 
-public:
+   public:
 	Window(unsigned int width, unsigned int height, const std::string &name) {
 		glfwSetErrorCallback(glfw_error_callback);
 		if (!glfwInit()) return;
@@ -41,9 +45,7 @@ public:
 
 	void BeginFrame() {
 		glfwPollEvents();
-		if(glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
-			glfwSetWindowShouldClose(window, true);
-		}
+		if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) { glfwSetWindowShouldClose(window, true); }
 
 		// Start the Dear ImGui frame
 		ImGui_ImplOpenGL3_NewFrame();
@@ -51,8 +53,6 @@ public:
 		ImGui::NewFrame();
 	}
 
-	bool shouldClose() {
-		return glfwWindowShouldClose(window);
-	}
+	bool shouldClose() { return glfwWindowShouldClose(window); }
 };
 }	  // namespace TaskSystem

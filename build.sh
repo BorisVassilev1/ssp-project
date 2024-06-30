@@ -1,1 +1,1 @@
-cmake --build ./Build -t install
+cmake --build ./Build -j 8 -t install

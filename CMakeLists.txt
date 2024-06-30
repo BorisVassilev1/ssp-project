@@ -13,6 +13,14 @@ add_subdirectory(PrinterExecutor)
 add_subdirectory(RaytracerExecutor)
 add_subdirectory(BRDFExecutor)
 
-target_compile_options(TaskSystem PUBLIC -g -fsanitize=address)
-target_link_options(TaskSystem PUBLIC -g -fsanitize=address)
+target_compile_options(TaskSystem PUBLIC 
+	#-g 
+	#-fsanitize=address
+	-O3
+)
+target_link_options(TaskSystem PUBLIC 
+	#-g 
+	#-fsanitize=address
+	-O3
+)
 

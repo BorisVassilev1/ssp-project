@@ -5,6 +5,11 @@
 #include <vector>
 #include <cassert>
 
+/**
+ * @brief A simple entity-pool-like container.
+ * 
+ * Iterators must be checked for nullptr. Also Not thread safe
+ */
 template <class T>
 class Pool {
 	std::vector<std::unique_ptr<T>> pool;
@@ -28,15 +33,18 @@ class Pool {
 		free.push(id);
 	}
 
-	T &operator[](std::size_t id) { 
+	T &operator[](std::size_t id) {
 		assert(id >= 0 && id < pool.size() && pool[id] != nullptr);
-		return *pool[id]; 
+		return *pool[id];
 	}
 
-	auto begin() const {return pool.begin();}
-	auto end() const {return pool.end();}
+	auto begin() const { return pool.begin(); }
+	auto end() const { return pool.end(); }
 };
 
+/**
+ * @brief SpinLock, copy pasta from lectures
+ */
 struct SpinLock {
 	std::atomic_flag flag;
 	void			 lock() {

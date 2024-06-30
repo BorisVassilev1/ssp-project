@@ -9,6 +9,9 @@
 #include <Executor.h>
 #include <TaskSystem.h>
 
+/**
+ * @brief computes a BRDF Integration map with a given resolution and sample count.
+ */
 struct BRDFBuilder : TaskSystem::Executor {
 	using uint = unsigned int;
 	ImageData		 image;

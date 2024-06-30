@@ -9,3 +9,15 @@ Just
 ./configure.sh
 ./build.sh
 ```
+
+## Usage
+
+An example can be found in TaskSystem/main.cpp . To test:
+```bash
+./run.sh # regular test
+./run.sh # with visualization of task states
+```
+
+## Implemented tasks
+
+I made a Task that computes a BRDF Integration map for realtime rendering.

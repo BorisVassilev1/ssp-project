@@ -68,13 +68,12 @@ struct TaskSystemExecutor {
 	/**
 	 * @brief Initialisation called once by the main application to allocate needed resources and start threads
 	 *
-	 * @param threadCount the desired number of threads to utilize. If zero, uses defaults to 
+	 * @param threadCount the desired number of threads to utilize. If zero, uses defaults to
 	 * the core count of the machine.
 	 */
 	static void Init(int threadCount = 0, bool gui = false) {
 		delete self;
-		if(threadCount == 0) 
-			threadCount = std::thread::hardware_concurrency();
+		if (threadCount == 0) threadCount = std::thread::hardware_concurrency();
 		self = new TaskSystemExecutor(threadCount, gui);
 	}
 
@@ -123,7 +122,7 @@ struct TaskSystemExecutor {
 	 * @param task
 	 * @return TaskState
 	 */
-	TaskState GetTaskState(TaskID task) { return tasks[task].state.load(); }
+	TaskState GetTaskState(TaskID task) { return tasks[task].state.load(std::memory_order_relaxed); }
 
 	/**
 	 * @brief Load a dynamic library from a path and attempt to call OnLibraryInit
@@ -144,8 +143,13 @@ struct TaskSystemExecutor {
 		executorConstructors[executorName] = constructor;
 	}
 
+	/**
+	 * @brief Destroys a task and forgets about it's existence
+	 *
+	 */
 	void DestroyTask(TaskID task) {
 		assert(tasks[task].state.load(std::memory_order_relaxed) == TaskState::Finished);
+		assert(tasks[task].finished.load(std::memory_order_relaxed) == threadCount);
 		std::lock_guard lock(addTaskLock);
 		tasks.remove(task);
 	}

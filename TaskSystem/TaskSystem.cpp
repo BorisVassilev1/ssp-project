@@ -114,8 +114,12 @@ void TaskSystemExecutor::reschedule() {
 		int priority = tasks[waiting.top()].priority;
 		while (!waiting.empty() && tasks[waiting.top()].priority == priority) {
 			TaskID task = waiting.top();
-			scheduled.push_back(task);
-			tasks[task].state.store(TaskState::Scheduled, std::memory_order_relaxed);
+			if(tasks[task].doNotSchedule.test(std::memory_order_relaxed)) {
+				threadFinished(tasks[task], task);
+			} else {
+				scheduled.push_back(task);
+				tasks[task].state.store(TaskState::Scheduled, std::memory_order_relaxed);
+			}
 			waiting.pop();
 		}
 		current_priority = priority;
@@ -129,7 +133,6 @@ void TaskSystemExecutor::reschedule() {
 		while (!scheduled.empty() && tasks[next].doNotSchedule.test(std::memory_order_relaxed)) {
 			threadFinished(tasks[next], next);
 			scheduled.pop_front();
-			tasks[next].state.store(TaskState::Finished);
 			if(!scheduled.empty()) next = scheduled.front();
 		}
 		if (scheduled.empty()) return;
@@ -152,7 +155,7 @@ void TaskSystemExecutor::reschedule() {
 	// find idling threads and assign them work
 	for (int i = 0; i < threadCount && !scheduled.empty(); ++i) {
 		TaskID next = scheduled.front();
-		while (!scheduled.empty() && tasks[next].executingCount.load(std::memory_order_relaxed) == 0 &&
+		while (!scheduled.empty() &&
 			   tasks[next].doNotSchedule.test(std::memory_order_relaxed)) {
 			threadFinished(tasks[next], next);
 			scheduled.pop_front();
@@ -170,8 +173,9 @@ void TaskSystemExecutor::reschedule() {
 		if (tasks[id].executingCount.load(std::memory_order_relaxed) > 0) {
 			tasks[id].state.store(TaskState::Executing);
 		} else {
-			if (tasks[id].finished.load(std::memory_order_relaxed) == threadCount)
-				tasks[id].state.store(TaskState::Finished);
+			if (tasks[id].finished.load(std::memory_order_relaxed) == threadCount) {
+				//tasks[id].state.store(TaskState::Finished);
+			}
 			else tasks[id].state.store(TaskState::Scheduled);
 		}
 	}
@@ -183,7 +187,8 @@ void TaskSystemExecutor::threadFinished(TaskData &info, TaskID taskID) {
 		assert(res <= this->threadCount - 1);
 		TaskCallback callback = info.callback.load(std::memory_order_relaxed);
 		if (callback) callback(taskID);
-		info.state.store(TaskState::Finished, std::memory_order_relaxed);
+		TaskState prev = info.state.exchange(TaskState::Finished, std::memory_order_relaxed);
+		assert(prev != TaskState::Finished);
 		info.done.notify_all();
 	}
 }
@@ -209,7 +214,7 @@ void TaskSystemExecutor::drawGui() {
 
 		for (auto &ptr : tasks) {
 			if (ptr == nullptr) continue;
-			const char *state = TaskSystemExecutor::TaskStateString(ptr->state.load());
+			const char *state = TaskSystemExecutor::TaskStateString(ptr->state.load(std::memory_order_relaxed));
 			ImGui::Text("task %2zu, priority %4d, status %s", ptr->id, ptr->priority, state);
 		}
 		ImGui::Text("\nscheduled: %zu\nwaiting: %zu", scheduled.size(), waiting.size());
@@ -233,15 +238,17 @@ TaskSystemExecutor::TaskSystemExecutor(int threadCount, bool gui)
 			}
 
 			addTaskLock.lock();
-			auto &info = tasks[execID];
+			TaskData &info = tasks[execID];
+			assert(info.state.load() != TaskState::Finished);
 			addTaskLock.unlock();
 			Executor::ExecStatus res = info.exec->ExecuteStep(threadID, this->threadCount);
 
 			if (res == Executor::ExecStatus::ES_Stop) {
 				//std::lock_guard lock(rescheduleMtx); // TODO: if something breaks, uncomment
-				info.executingCount.fetch_add(-1, std::memory_order_relaxed);
+				//printf("TASK %zu FINISH %d\n", execID, threadID);
 				info.doNotSchedule.test_and_set(std::memory_order_relaxed);
 				if (executing[threadID].compare_exchange_strong(execID, -1, std::memory_order_acq_rel)) {
+					info.executingCount.fetch_add(-1, std::memory_order_relaxed);
 					threadFinished(info, execID);
 				}
 
@@ -270,7 +277,7 @@ TaskSystemExecutor::TaskSystemExecutor(int threadCount, bool gui)
 				window->SwapBuffers();
 			}
 		}
-		delete[] window;
+		delete window;
 	};
 
 	running = true;
@@ -300,7 +307,7 @@ void TaskSystemExecutor::OnTaskCompleted(TaskID task, TaskCallback callback) {
 
 void TaskSystemExecutor::TaskData::waitDone() {
 	std::unique_lock lock(mtx);
-	done.wait(lock, [this] { return state.load(std::memory_order_relaxed) == TaskState::Finished; });
+	done.wait(lock, [this] { return state.load(std::memory_order_relaxed) == TaskState::Finished;});
 }
 
 };	   // namespace TaskSystem

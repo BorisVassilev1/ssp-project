@@ -62,7 +62,7 @@ void testRenderer() {
 	assert(libLoaded);
 	std::unique_ptr<Task> task1 = std::make_unique<RaytracerParams>("HeavyMesh");
 	std::unique_ptr<Task> task2 = std::make_unique<RaytracerParams>("ManySimpleMeshes");
-	std::unique_ptr<Task> task3 = std::make_unique<RaytracerParams>("ManyHeavyMeshes");
+	//std::unique_ptr<Task> task3 = std::make_unique<RaytracerParams>("ManyHeavyMeshes");
 
 	TaskSystemExecutor::TaskID id1 = ts.ScheduleTask(std::move(task1), 100);
 	TaskSystemExecutor::TaskID id2 = ts.ScheduleTask(std::move(task2), 100);
