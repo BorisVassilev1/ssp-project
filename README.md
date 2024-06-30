@@ -4,7 +4,7 @@ Implements a multithreaded task system with priorities.
 
 ## Compilation
 
-Just 
+Clone submodules, then just:
 ```bash
 ./configure.sh
 ./build.sh
