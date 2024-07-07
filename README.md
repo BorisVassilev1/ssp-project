@@ -15,7 +15,7 @@ Clone submodules, then just:
 An example can be found in TaskSystem/main.cpp . To test:
 ```bash
 ./run.sh # regular test
-./run.sh # with visualization of task states
+./run.sh 0 1 # with visualization of task states
 ```
 
 ## Implemented tasks
